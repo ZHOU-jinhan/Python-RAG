@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+
+    <script type="text/javascript" src="/static/jsscripts/vue.js"></script>
+    <script type="text/javascript" src="/static/jsscripts/axios.js"></script>
+    <script type="text/javascript" src="/static/jsscripts/jsPlumb.js"></script>
+    <script type="text/javascript" src="/static/jsscripts/d3.js"></script>
+    <script type="text/javascript" src="/static/jsscripts/d3-sankey.js"></script>
+    <script type="text/javascript" src="/static/jsscripts/elementui/lib-master/index.js"></script>
+
+    <!-- 样式设置 -->
+    <link rel="stylesheet" href="/static/jsscripts/elementui/lib-master/theme-chalk/index.css">
+
+    <style>
+        .d3-container {
+          position: relative;
+        }
+        .d3-container .node-point {
+          border-radius: 2px;
+          width: 4px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="d3-container" id="graph-interface">
+      <div>
+        <el-tag size="mini" type="info"> 查看实体 </el-tag>
+        <el-tag
+          v-for="typeName of nodeTypes"
+          :key="'feek-node-'+typeName"
+          size="mini"
+          :style="{'background-color':  typeColor[typeName].isChosen ? typeColor[typeName].color : 'gray'}"
+          @click="clickType(typeName)">
+          <span v-text="typeName" style="color: black"></span>
+        </el-tag>
+      </div>
+
+      <div>
+        <el-tag size="mini" type="info"> 查看关联 </el-tag>
+        <el-tag
+          v-for="typeName of connTypes"
+          :key="'feek-conn-'+typeName"
+          size="mini"
+          :style="{'background-color': connTypeColor[typeName].isChosen ? connTypeColor[typeName].color : 'gray'}"
+          @click="clickConnType(typeName)">
+          <span v-text="typeName" style="color: black"></span>
+        </el-tag>
+      </div>
+
+      <div>
+        <el-tag size="mini" type="info"> 添加实体 </el-tag>
+        <el-tag
+          v-for="typeName of nodeTypes"
+          :key="'add-node-'+typeName"
+          size="mini"
+          :style="{'background-color': typeColor[typeName].color}"
+          @click="addNode(typeName)">
+          <span v-text="typeName"  style="color: black"></span>
+        </el-tag>
+      </div>
+
+      <div>
+        <el-tag size="mini" type="info"> 添加关联 </el-tag>
+        <el-tag
+          v-for="typeName of connTypes"
+          :key="'add-conn-'+typeName"
+          size="mini"
+          :style="{'background-color': connTypeColor[typeName].isChosen ? connTypeColor[typeName].color : 'gray'}"
+          @click="addConn(typeName)">
+          <span v-text="typeName" style="color: black"></span>
+        </el-tag>
+      </div>
+
+      <div>
+        <el-tag size="mini" type="info"> 其余操作 </el-tag>
+        <el-tag type="warning" size="mini" id="zoomIn"><i class="el-icon-plus"></i></el-tag>
+        <el-tag type="warning" size="mini" id="reset"><i class="el-icon-full-screen"></i></el-tag>
+        <el-tag type="warning" size="mini" id="zoomOut"><i class="el-icon-minus"></i></el-tag>
+        <el-tag type="success" size="mini" @click="save_db"><i class="el-icon-download"></i></el-tag>
+        <el-tag type="danger" size="mini" @click="flush_db"><i class="el-icon-delete"></i></el-tag>
+      </div>
+
+      <div>
+        <el-tag size="mini" type="info"> 聚焦实体 </el-tag>
+        <el-select v-model="toSelectName" placeholder="请输入聚焦实体"
+                   clearable filterable remote :remote-method="getSelectName"
+                  :loading="loading"  @change="handleChange" :disabled="currentName.length >= nameMax">
+          <el-option :label="n.name" :value="n.name" :key="'to-select-name-'+n.id" v-for="n in queryName" v-if="!currentName.includes(n.name)"></el-option>
+        </el-select>
+      </div>
+      <div>
+        <el-tag type="primary" size="mini" closable v-for="name in currentName" :key="'selected-name-'+name" @close="handleClose(name)"><span v-text="name"></span></el-tag>
+      </div>
+
+      <svg style="height: 80dvh; width: 80dvw"/>
+      <el-dialog :visible.sync="editNodeDialog" title="实体属性编辑页面">
+          <el-form :model="editNodeForm">
+              <el-form-item prop="name"  label="实体名称" :rules="[
+                    {
+                      required: true,
+                      message: '请输入实体名称',
+                      trigger: 'blur'
+                    }
+                  ]">
+                  <el-input v-model="editNodeForm.name" placeholder="请输入实体名称" clearable :disabled="fuseMode"></el-input>
+              </el-form-item>
+              <el-form-item prop="type" label="实体属性"
+                            :rules="[
+                    {
+                      required: true,
+                      message: '请输入实体属性',
+                      trigger: 'blur'
+                    }
+                  ]">
+                  <el-select v-model="editNodeForm.class" placeholder="请输入实体属性" clearable filterable :disabled="fuseMode">
+                    <el-option :label="typ" :value="typ" :key="'editNodeForm-class-'+typ" v-for="typ in Object.keys(typeColor).filter(itm=>{return typeColor[itm].isChosen})"></el-option>
+                  </el-select>
+              </el-form-item >
+              <el-form-item prop="targ_uid"  label="缩合实体ID" :rules="[
+                    {
+                      required: false,
+                      message: '请输入缩合实体ID',
+                      trigger: 'blur'
+                    }
+                  ]" v-if="fuseMode">
+                  <el-select v-model="editNodeForm.targ_uid" placeholder="请输入缩合实体ID"
+                            clearable filterable remote :remote-method="getSelectName"
+                            :loading="loading">
+                    <el-option :label="n.name" :value="n.id" :key="'editNodeForm-targ_uid-'+n.id" v-for="n in queryName" v-if="!n.id != editNodeForm.id"></el-option>
+                  </el-select>
+              </el-form-item>
+              <el-form-item prop="properties"  label="属性">
+                {{ editNodeForm.properties }}
+              </el-form-item>
+              <el-form-item>
+                  <el-row type="flex" justify="end">
+                      <el-button type="primary" @click="editNodeConfirm">确认</el-button>
+                      <el-button plain @click="editNodeDialog = false;">取消</el-button>
+                  </el-row>
+              </el-form-item>
+          </el-form>
+      </el-dialog>
+      <el-dialog :visible.sync="editConnDialog" title="关联属性编辑页面">
+        <el-form :model="editConnForm">
+            <el-form-item prop="class"  label="关联属性" :rules="[
+                  {
+                    required: true,
+                    message: '请输入关联属性',
+                    trigger: 'blur'
+                  }
+                ]">
+                <el-select v-model="editConnForm.class" placeholder="请输入关联属性" clearable filterable>
+                  <el-option :label="typ" :value="typ" :key="'editConnForm-class-'+typ" v-for="typ in Object.keys(connTypeColor).filter(itm=>{return connTypeColor[itm].isChosen})"></el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item prop="source" label="关联施动实体"
+                          :rules="[
+                  {
+                    required: true,
+                    message: '请输入关联施动实体',
+                    trigger: 'blur'
+                  }
+                ]">
+                <el-select v-model="editConnForm.source" placeholder="请输入关联施动实体"
+                          clearable filterable remote :remote-method="getSelectName"
+                          :loading="loading">
+                  <el-option :label="n.name" :value="n.id" :key="'editConnForm-source-'+n.id" v-for="n in queryName" v-if="n.id != (editConnForm.target || '')"></el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item prop="target" label="关联受动实体"
+                          :rules="[
+                  {
+                    required: true,
+                    message: '请输入关联受动实体',
+                    trigger: 'blur'
+                  }
+                ]">
+                <el-select v-model="editConnForm.target" placeholder="请输入关联受动实体"
+                          clearable filterable remote :remote-method="getSelectName"
+                          :loading="loading">
+                  <el-option :label="n.name" :value="n.id" :key="'editConnForm-target-'+n.id" v-for="n in queryName" v-if="n.id != (editConnForm.source || '')"></el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item prop="properties"  label="属性">
+              {{ editConnForm.properties }}
+            </el-form-item>
+            <el-form-item>
+                <el-row type="flex" justify="end">
+                    <el-button type="primary" @click="editConnConfirm">确认</el-button>
+                    <el-button type="warning" @click="delConnConfirm" v-if="!editConnNewMode">删除</el-button>
+                    <el-button plain @click="editConnDialog = false;">取消</el-button>
+                </el-row>
+            </el-form-item>
+        </el-form>
+      </el-dialog>
+    </div>
+      
+    <script>
+    var vm = new Vue({
+      el: "#graph-interface",
+      data() {
+        return {
+          typeColor: {}, // 类型配色
+          nodeTypes: ['元件', '故障', "信号"], // 分类
+          connTypeColor: {},
+          connTypes: ['传播', '导致', '属于'], // 分类
+          nodes: [], // 实体集
+          links: [], // 关系集
+          currentName: [],
+          queryName: [],
+          nSkip: 5,
+          toSelectName: null,
+          visibleFlag: false,
+          editConnNewMode: false,
+          editNodeForm : {},
+          editNodeDialog: false,
+          editConnForm : {},
+          editConnDialog: false,
+          fuseMode: false,
+          updateObj: null,
+          loading: false,
+          nameMax: 50,
+        }
+      },
+      created() {
+        this.setTypeColor();
+      },
+      mounted() {
+        this.initD3();
+        let fd = new FormData();
+        fd.append("names", JSON.stringify(this.currentName));
+        fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+        fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+        fd.append("n", this.nSkip);
+        axios.post("/graph-interface/load-graph", fd).then(res => {
+            this.postRender(res.data);
+        })
+      },
+      methods: {
+        getSelectName(query){
+          this.loading = true;
+          let fd = new FormData();
+          fd.append("query", query);
+          axios.post("/graph-interface/re-match-name", fd).then(res => {
+            this.queryName = res.data;
+            this.loading = false;
+          }).catch(e=>{
+            this.queryName = [];
+            this.loading = false;
+          })
+        },
+        handleClose(tag){
+          let ind = this.currentName.indexOf(tag);
+          if (ind !== -1) {
+            this.currentName.splice(ind, 1);
+          }
+          this.$forceUpdate();
+          let fd = new FormData();
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("n", this.nSkip);
+          axios.post("/graph-interface/change-query", fd).then(res => {
+              this.postRender(res.data);
+          })
+        },
+        handleChange(){
+          this.currentName.push(this.toSelectName);
+          this.$forceUpdate();
+          let fd = new FormData();
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("n", this.nSkip);
+          axios.post("/graph-interface/change-query", fd).then(res => {
+              this.postRender(res.data);
+          })
+        },
+        save_db() {
+          // 模拟接口返回实体和关系数据
+          axios.get("/graph-interface/save-graph").then(res => {
+            this.$message.success("保存成功！")
+          })
+        },
+        flush_db() {
+          // 模拟接口返回实体和关系数据
+          axios.get("/graph-interface/flush-graph").then(res => {
+            this.$message.success("清空成功！")
+            this.postRender(res.data);
+          })
+        },
+        handleTypeMouseout() {
+          d3.selectAll('.single-node').style('opacity', 1)
+          d3.selectAll('.single-line').style('opacity', 1)
+        },
+        handleTypeMouseover(data) {
+          d3.selectAll('.single-node').style('opacity', 0.1)
+          d3.selectAll('.single-line').style('opacity', 0.1)
+          for (let i = 0; i < data.length; i++) {
+            const nodeID = '#single-node' + data[i].id
+            d3.selectAll(nodeID).style('opacity', 1)
+          }
+        },
+        setTypeColor() {
+          this.nodeTypes.forEach(e => {
+            if (Object.keys(this.typeColor).indexOf(e) == -1) {
+              this.typeColor[e] = {color: this.randomColor(), isChosen: true}
+            }
+          });
+          this.connTypes.forEach(e => {
+            if (Object.keys(this.connTypeColor).indexOf(e) == -1) {
+              this.connTypeColor[e] = {color: this.randomColor(), isChosen: true}
+            }
+          })
+        },
+        clickType(e) {
+          this.typeColor[e].isChosen = ! this.typeColor[e].isChosen
+          this.$forceUpdate();
+          let fd = new FormData();
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("n", this.nSkip);
+          axios.post("/graph-interface/change-query", fd).then(res => {
+              this.postRender(res.data);
+          })
+        },
+        clickConnType(e) {
+          this.connTypeColor[e].isChosen = ! this.connTypeColor[e].isChosen
+          this.$forceUpdate();
+          let fd = new FormData();
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("n", this.nSkip);
+          axios.post("/graph-interface/change-query", fd).then(res => {
+              this.postRender(res.data);
+          })
+        },
+        randomColor() {
+          const colors = ['#F4AB87', '#EEC88D', '#76CADF', '#97DA9D', '#88DCD8', '#FB7F89', '#F0E403', '#F576BE', '#ACADFF', '#7EC3FB', 
+                          '#D0DB02', '#C07B11', '#00ACC2', '#2AAD41', '#A59D00', '#EB4747', '#CD0EBD', '#DE3997']
+          return colors[Math.floor(Math.random() * colors.length)]
+        },
+        postRender(_struct) {
+          this.nodes = _struct.nodes;
+          this.links = _struct.edges;
+          this.updateObj.update({
+              nodes: this.nodes,
+              links: this.links
+          })
+          this.editNodeDialog = false;
+          this.editConnDialog = false;
+        },
+        addNode(typ){
+          this.editNodeForm = {
+            name: "",
+            id: "",
+            class: typ,
+            properties: {},
+            targ_uid: "",
+          };
+          this.fuseMode = false;
+          this.editNodeDialog = true;
+        },
+        addConn(typ){
+          this.editConnForm = {
+            source: "",
+            target: "",
+            class: typ,
+            oldType: '',
+            properties: {},
+          };
+          this.editConnNewMode = true;
+          this.editConnDialog = true;
+        },
+        editNodeConfirm() {
+          // 模拟接口返回实体和关系数据
+          let fd = new FormData();
+          this.currentName.push(this.editNodeForm.name);
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("node", JSON.stringify(this.editNodeForm));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("n", this.nSkip);
+          if (this.fuseMode){
+            fd.append("targ_uid", this.editNodeForm.targ_uid);
+            axios.post("/graph-interface/fuse-node", fd).then(res => {
+                this.postRender(res.data);
+            })
+          } else {
+            axios.post("/graph-interface/add-node", fd).then(res => {
+                this.postRender(res.data);
+          })
+          }
+        },
+        editConnConfirm() {
+          // 模拟接口返回实体和关系数据
+          let fd = new FormData();
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("edge", JSON.stringify(this.editConnForm));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("oldType", this.editConnForm.oldType);
+          fd.append("n", this.nSkip);
+          axios.post("/graph-interface/add-edge", fd).then(res => {
+              this.postRender(res.data);
+          })
+        },
+        delConnConfirm() {
+          // 模拟接口返回实体和关系数据
+          let fd = new FormData();
+          fd.append("names", JSON.stringify(this.currentName));
+          fd.append("edge", JSON.stringify(this.editConnForm));
+          fd.append("connTypes", JSON.stringify(Object.keys(this.connTypeColor).filter(itm=>{return this.connTypeColor[itm].isChosen})));
+          fd.append("nodeTypes", JSON.stringify(Object.keys(this.typeColor).filter(itm=>{return this.typeColor[itm].isChosen})));
+          fd.append("n", this.nSkip);
+          axios.post("/graph-interface/del-edge", fd).then(res => {
+              this.postRender(res.data);
+          })
+        },
+        initD3() {
+          const _this = this
+          // 数据示例
+          // nodes = [
+          //   { id: 'a', name: 'a' },
+          //   { id: 'b', name: 'b' },
+          //   { id: 'c', name: 'c' }
+          // ]
+          // links = [
+          //   { id: 'ab', source: 'a', target: 'b' },
+          //   { id: 'bc', source: 'b', target: 'c' }
+          // ]
+    
+          // 容器
+          const svg = d3.select('svg')
+            .attr('viewBox', [-window.innerWidth / 2, -window.innerHeight / 2, window.innerWidth, window.innerHeight])
+    
+          // 缩放
+          const zoom = d3.zoom()
+            .on('zoom', function () {
+              svg.attr('transform', d3.zoomTransform(svg.node()))
+            })
+          svg.call(zoom)
+    
+          d3.select('#reset')
+            .on('click', function () {
+              svg.call(zoom.transform, d3.zoomIdentity)
+            })
+          d3.select('#zoomIn')
+            .on('click', function () {
+              zoom.scaleBy(svg, 1.1)
+            })
+          d3.select('#zoomOut')
+            .on('click', function () {
+              zoom.scaleBy(svg, 0.9) // 执行该方法后 会触发 zoom 事件 0.9 缩小
+            })
+    
+          // 新建一个力导向图
+            const simulation = d3.forceSimulation()
+            .force('charge', d3.forceManyBody().strength(-1000))
+            .force('link', d3.forceLink().id(d => d.id).distance(200))
+            .force('x', d3.forceX())
+            .force('y', d3.forceY())
+            .on('tick', ticked)
+    
+          
+          // 关系路径
+          let link = svg.append('g')
+            .attr('class', 'link-container')
+            .attr('stroke', '#000')
+            .attr('stroke-width', 1)
+            .selectAll('line')
+    
+          // 关系文字
+          let linkText = svg.append('g')
+            .attr('class', 'link-text-container')
+            //.attr('stroke', '#000')
+            //.attr('stroke-width', 1.5)
+            .selectAll('text')
+    
+          // 实体
+          let node = svg.append('g')
+            .attr('class', 'node-container')
+            .selectAll('circle')
+    
+          function ticked() {
+            node
+              .attr('transform', function (d) {
+                return 'translate(' + d.x + ',' + d.y + ')'
+              })
+              .style("background-color", function (d) {
+                return _this.typeColor[d.class].color
+              })
+    
+            link.attr('x1', d => d.source.x)
+              .attr('y1', d => d.source.y)
+              .attr('x2', d => d.target.x)
+              .attr('y2', d => d.target.y)
+              .style("background-color", function (d) {
+                return _this.connTypeColor[d.class].color
+              })
+
+            linkText
+              .attr('x', d => (d.source.x + d.target.x) / 2)
+              .attr('y', d => (d.source.y + d.target.y) / 2)
+          }
+    
+          // 更新
+          this.updateObj = Object.assign(svg.node(), {
+            update({ nodes, links }) {
+              // 做一个浅复制，以防止突变，回收旧实体以保持位置和速度
+              const old = new Map(node.data().map(d => [d.id, d]))
+              nodes = nodes.map(d => Object.assign(old.get(d.id) || {}, d))
+              links = links.map(d => Object.assign({}, d))
+    
+              // 实体
+              node = node
+                .data(nodes, d => d.id)
+                .join(
+                  enter =>
+                    enter.append('g')
+                      .attr('class', 'single-node')
+                      .attr('id', (d) => {
+                        return 'single-node' + d.id
+                      })
+                )
+                .call(d3.drag()
+                  .on('start', dragstarted)
+                  .on('drag', dragged)
+                  .on('end', dragended))
+              d3.selectAll('.single-node')
+                .append('circle')
+                .attr('r', 30)
+                .attr('fill', nodeColor)
+                .style('cursor', 'pointer')
+              // 实体文字
+              d3.selectAll('.single-node')
+                .append('text')
+                .attr('y', 0)
+                .attr('dy', 5)
+                .attr('text-anchor', 'middle')
+                .style('cursor', 'pointer')
+                .attr('x', function (d) {
+                  return textBreaking(d3.select(this), d, false)
+                })
+    
+              // 绘制箭头
+              svg.append('g')
+                .attr('class', 'arrow-marker')
+                .append('marker')
+                .attr('id', 'arrow-marker')
+                .attr('markerUnits', 'strokeWidth') // 设置为 strokeWidth 箭头会随着线的粗细发生变化
+                .attr('markerUnits', 'userSpaceOnUse')
+                .attr('viewBox', '0 -5 10 10') // 坐标系的区域
+                .attr('refX', 40) // 箭头坐标
+                .attr('refY', 0)
+                .attr('markerWidth', 10) // 标识的大小
+                .attr('markerHeight', 10)
+                .attr('orient', 'auto') // 绘制方向，可设定为：auto（自动确认方向）和 角度值
+                .attr('stroke-width', 2) // 箭头宽度
+                .append('path')
+                .attr('d', 'M0,-5L10,0L0,5') // 箭头的路径
+    
+              // 关系路径
+              link = link
+                .data(links, d => [d.source, d.target])
+                .join(
+                  enter => 
+                    enter.append('line')
+                      .attr('class', 'single-line')
+                      .attr('id', (d) => {
+                        return 'single-line' + d.source + '-' + d.target + '-' + d.class
+                      })
+                      .attr('stroke', function (d) {
+                        return _this.connTypeColor[d.class].color;
+                      })
+                      .attr('marker-end', 'url(#arrow-marker)') // 根据箭头标记的 id 号标记箭头
+                )
+    
+              // 路径文字
+              linkText = linkText
+                .data(links, d => [d.source, d.target])
+                .join(
+                  enter =>
+                    enter.append('text')
+                      .attr('class', 'link-text')
+                      .attr('id', (d) => {
+                        return 'link-text' + d.source + '-' + d.target + '-' + d.class
+                      })
+                      .text((d) => {
+                        return d.class
+                      })
+                      //.attr('stroke-width', '1')
+                      .attr('stroke', function (d) {
+                        return _this.connTypeColor[d.class].color;
+                      })
+                      .style('cursor', 'pointer')
+                )
+    
+              simulation.nodes(nodes)
+              simulation.force('link').links(links)
+              simulation.alpha(1).restart()
+    
+              node
+                .on('click', function (d) {
+                  _this.visibleFlag = ! _this.visibleFlag
+                  toggleMenu(d3.select(this), d3.select(this)._groups[0][0].__data__, _this.visibleFlag)
+                }) /**此处生成操作面板*/
+                .on('mouseover', function (d) {
+                  // 鼠标移入实体，高亮当前实体及与当前实体有关系的路径和实体
+                  d3.selectAll('.single-node').style('opacity', 0.2)
+                  d3.selectAll('.single-line').style('opacity', 0.2)
+                  d3.selectAll('.link-text').style('opacity', 0.2)
+                  d3.select('#single-node' + d.target.__data__.id).style('opacity', 1)
+                  const relationLinks = []
+                  _this.links.forEach((item) => {
+                    if (item.source === d.target.__data__.id || item.target === d.target.__data__.id) {
+                      relationLinks.push(item)
+                    }
+                  })
+                  relationLinks.forEach((item) => {
+                    d3.select('#single-line' + item.source + '-' + item.target + '-' + item.class).style('opacity', 1)
+                    d3.select('#link-text' + item.source + '-' + item.target + '-' + item.class).style('opacity', 1)
+                    d3.select('#single-node' + item.source).style('opacity', 1)
+                    d3.select('#single-node' + item.target).style('opacity', 1)
+                  })
+                })
+                .on('mouseout', function () {
+                  d3.selectAll('.single-node').style('opacity', 1)
+                  d3.selectAll('.single-line').style('opacity', 1)
+                  d3.selectAll('.link-text').style('opacity', 1)
+                })
+
+                link
+                .on('mouseover', function (d) {
+                  d3.selectAll('.single-node').style('opacity', 0.2)
+                  d3.selectAll('.single-line').style('opacity', 0.2)
+                  d3.selectAll('.link-text').style('opacity', 0.2)
+                    d3.select('#single-line' + d.target.__data__.source.id + '-' + d.target.__data__.target.id + '-' + d.target.__data__.class).style('opacity', 1)
+                  d3.select('#link-text' + d.target.__data__.source.id + '-' + d.target.__data__.target.id + '-' + d.target.__data__.class).style('opacity', 1)
+                  d3.select('#single-node' + d.target.__data__.source.id).style('opacity', 1)
+                  d3.select('#single-node' + d.target.__data__.target.id).style('opacity', 1)
+                })
+                .on('mouseout', function () {
+                  d3.selectAll('.single-node').style('opacity', 1)
+                  d3.selectAll('.single-line').style('opacity', 1)
+                  d3.selectAll('.link-text').style('opacity', 1)
+                })
+    
+              linkText
+                .on('click', function (d) {
+                  // 编辑边
+                  let edge = d3.select(this)._groups[0][0].__data__;
+                  let fd = new FormData();
+                  fd.append("srcUid", edge.source.id)
+                  fd.append("trgUid", edge.target.id)
+                  fd.append("connType", edge.class)
+                  axios.post("/graph-interface/get-edge-info", fd).then(res=>{
+                    _this.editConnForm = {
+                      source: edge.source.id,
+                      target: edge.target.id,
+                      class: edge.class,
+                      oldType: edge.class,
+                      properties: res.data,
+                    };
+                    _this.editConnNewMode = false;
+                    _this.editConnDialog = true;
+                  })
+                  
+                  /**_this.visibleConnFlag = ! _this.visibleConnFlag
+                  toggleConnMenu(d3.select(this), d3.select(this)._groups[0][0].__data__, _this.visibleConnFlag)**/
+                })
+                .on('mouseover', function (d) {
+                  d3.selectAll('.single-node').style('opacity', 0.2)
+                  d3.selectAll('.single-line').style('opacity', 0.2)
+                  d3.selectAll('.link-text').style('opacity', 0.2)
+                    d3.select('#single-line' + d.target.__data__.source.id + '-' + d.target.__data__.target.id + '-' + d.target.__data__.class).style('opacity', 1)
+                  d3.select('#link-text' + d.target.__data__.source.id + '-' + d.target.__data__.target.id + '-' + d.target.__data__.class).style('opacity', 1)
+                  d3.select('#single-node' + d.target.__data__.source.id).style('opacity', 1)
+                  d3.select('#single-node' + d.target.__data__.target.id).style('opacity', 1)
+                })
+                .on('mouseout', function () {
+                  d3.selectAll('.single-node').style('opacity', 1)
+                  d3.selectAll('.single-line').style('opacity', 1)
+                  d3.selectAll('.link-text').style('opacity', 1)
+                })
+            }
+          })
+    
+          /**
+            * @name: 设置实体颜色
+            * @param {*} node
+            */
+          function nodeColor(node) {
+            const type = node.class
+            if (_this.typeColor[type]) {
+              return _this.typeColor[type].color;
+            } else {
+              return '#ddd'
+            }
+          }
+    
+          // 菜单栏主要函数
+          /**function editConn(edge) {
+            // 模拟接口返回实体和关系数据
+            d3.select('.menu-line').remove();
+            _this.editConnForm = {
+              source: edge.source,
+              target: edge.target,
+              class: edge.class,
+              properties: edge.properties || {},
+            };
+            _this.editConnDialog = true;
+          }
+
+          function deleConn(edge) {
+            d3.select('.menu-line').remove();
+            let fd = new FormData();
+            fd.append("edge", JSON.stringify(edge));
+            fd.append("names", JSON.stringify(_this.currentName));
+            fd.append("connTypes", JSON.stringify(Object.keys(_this.connTypeColor).filter(itm=>{return _this.connTypeColor[itm].isChosen})));
+            fd.append("nodeTypes", JSON.stringify(Object.keys(_this.typeColor).filter(itm=>{return _this.typeColor[itm].isChosen})));
+            fd.append("n", _this.nSkip);
+            axios.post("/graph-interface/del-edge", fd).then(res => {
+                _this.postRender(res.data);
+            })
+          }*/
+
+          function editNode(node) {
+            // 模拟接口返回实体和关系数据
+            d3.select('.menu-circle').remove();
+            let fd = new FormData();
+            fd.append("nodeUid", node.id)
+            axios.post("/graph-interface/get-node-info", fd).then(res=>{
+              _this.editNodeForm = {
+                name: node.name,
+                id: node.id,
+                class: node.class,
+                properties: res.data,
+                targ_uid: "",
+              };
+              _this.fuseMode = false;
+              _this.editNodeDialog = true;
+            })
+            
+          }
+
+          function fuseNode(node) {
+            d3.select('.menu-circle').remove();
+            _this.editNodeForm = {
+              name: node.name,
+              id: node.id,
+              class: node.class,
+              properties: node.properties || {},
+              targ_uid: "",
+            };
+            _this.fuseMode = true;
+            _this.editNodeDialog = true;
+          }
+    
+          /**
+            * @name: 关联实体去重重组
+            * @param {*} objarray
+            */
+          function deleNode(node) {
+            d3.select('.menu-circle').remove();
+            let index = _this.currentName.indexOf(node.id);
+              if (index != -1){
+                _this.currentName.splice(index, 1);
+              }
+              let fd = new FormData();
+              fd.append("node", JSON.stringify(node));
+              fd.append("names", JSON.stringify(_this.currentName));
+              fd.append("connTypes", JSON.stringify(Object.keys(_this.connTypeColor).filter(itm=>{return _this.connTypeColor[itm].isChosen})));
+              fd.append("nodeTypes", JSON.stringify(Object.keys(_this.typeColor).filter(itm=>{return _this.typeColor[itm].isChosen})));
+              fd.append("n", _this.nSkip);
+              axios.post("/graph-interface/del-node", fd).then(res => {
+                  _this.postRender(res.data);
+              })
+          }
+    
+          /**
+            * @name: 收起，删除当前实体下一级没有其他关系的实体
+            * @param {*} node
+            */
+          function unchooseNode(node) {
+            d3.select('.menu-circle').remove();
+            let index = _this.currentName.indexOf(node.id);
+            if (index != -1){
+              _this.currentName.splice(index, 1);
+              let fd = new FormData();
+              fd.append("names", JSON.stringify(_this.currentName));
+              fd.append("connTypes", JSON.stringify(Object.keys(_this.connTypeColor).filter(itm=>{return _this.connTypeColor[itm].isChosen})));
+              fd.append("nodeTypes", JSON.stringify(Object.keys(_this.typeColor).filter(itm=>{return _this.typeColor[itm].isChosen})));
+              fd.append("n", _this.nSkip);
+              axios.post("/graph-interface/change-query", fd).then(res => {
+                  _this.postRender(res.data);
+              })
+            }
+          }
+    
+          /**
+            * @name: 隐藏，删除当前及下一级没有其他关系的实体
+            * @param {*} node
+            */
+          function chooseNode(node) {
+            d3.select('.menu-circle').remove();
+            _this.currentName.push(node.id)
+            let fd = new FormData();
+            fd.append("names", JSON.stringify(_this.currentName));
+            fd.append("connTypes", JSON.stringify(Object.keys(_this.connTypeColor).filter(itm=>{return _this.connTypeColor[itm].isChosen})));
+            fd.append("nodeTypes", JSON.stringify(Object.keys(_this.typeColor).filter(itm=>{return _this.typeColor[itm].isChosen})));
+            fd.append("n", _this.nSkip);
+            axios.post("/graph-interface/change-query", fd).then(res => {
+                _this.postRender(res.data);
+            })
+          }
+
+          /**function treatConnMenuEvent(e_type, currentD){
+            if (e_type === 'editConn') {
+                editConn(currentD)
+            } else {
+                deleConn(currentD)
+            }
+          }*/
+    
+          function treatMenuEvent(e_type, currentD){
+              if (e_type === 'editNode') {
+                  editNode(currentD)
+              } else if (e_type === 'deleNode') {
+                  deleNode(currentD)
+              } else if (e_type === 'fuseNode') {
+                  fuseNode(currentD)
+              } else if (e_type === 'focusOn') {
+                  chooseNode(currentD)
+              } else {
+                  unchooseNode(currentD)
+              }
+          }
+
+          /**
+            * @name: 生成操作菜单Text
+            * @param {*} current 当前元素
+            * @param {*} d 当前元素对应的数据
+            * @param {*} flag 显隐
+            */
+          /**function toggleConnMenu(current, d, flag) {
+          if (!flag){
+            d3.select('.menu-line').remove();
+            return ;
+          }
+          const currentDConn = {
+            ...d,
+            source: d.source.id,
+            target: d.target.id,
+          }
+          const dataConn = [{
+            population: 25,
+            value: '编辑',
+            type: 'editConn'
+          }, {
+            population: 25,
+            value: '删除',
+            type: 'deleConn'
+          }]
+          // 创建一个环生成器
+          const arc = d3.arc()
+            .innerRadius(80) // 内半径
+            .outerRadius(35) // 外半径
+          const pie = d3.pie()
+            .value(function (d) {
+              return d.population
+            })
+            .sort(null)
+          const pieData = pie(dataConn)
+          const pieAngle = pieData.map(function (p) {
+            return (p.startAngle + p.endAngle) / 2 / Math.PI * 180
+          })
+          // 菜单容器
+          const gConn = current
+            .append('g')
+            .attr('class', 'menu-line')
+            .attr('width', 100)
+            .attr('height', 100)
+          console.log(current, gConn)
+          const Pie = gConn.append('g')
+          Pie.selectAll('path')
+            .data(pieData)
+            .enter()
+            .append('path')
+            .attr('d', arc)
+            .attr('fill', '#d3d7dc')
+            .style('stroke', '#fff')
+            .style('cursor', 'pointer')
+            .on('click', function (d) {
+              treatConnMenuEvent(d.target.__data__.type, currentDConn)
+              // d3.event.stopPropagation()
+              // d.stopPropagation()
+            })
+            .on('mouseover', function () {
+              d3.select(this)
+                .style('fill', '#d3d7dc')
+                .transition()
+                .style('fill', '#aaaeb4')
+            })
+            .on('mouseout', function () {
+              d3.select(this)
+                .style('fill', '#aaaeb4')
+                .transition()
+                .style('fill', '#d3d7dc')
+            })
+          
+          // 安妮文字
+          const labelFontSize = 12
+          const labelValRadius = (170 * 0.35 - labelFontSize * 0.35)
+          const labelValRadius1 = (170 * 0.35 + labelFontSize * 0.35)
+          const labelsVals = current
+            .select('.menu-line')
+            .append('g')
+            .classed('labelsvals', true)
+          // 定义两条路径以使标签的方向正确
+          labelsVals.append('def')
+            .append('path')
+            .attr('id', 'label-path-1')
+            .attr('d', `m0 ${-labelValRadius} a${labelValRadius} ${labelValRadius} 0 1,1 -0.01 0`)
+          labelsVals.append('def')
+            .append('path')
+            .attr('id', 'label-path-2')
+            .attr('d', `m0 ${-labelValRadius1} a${labelValRadius1} ${labelValRadius1} 0 1,0 0.01 0`)
+          labelsVals.selectAll('text')
+            .data(dataConn)
+            .enter()
+            .append('text')
+            .attr('dy', function (d) {
+              return 0;
+            })
+            .style('font-size', labelFontSize)
+            .style('fill', 'black')
+            .style('font-weight', 'bold')
+            .style('text-anchor', 'middle')
+            .append('textPath')
+            .style('cursor', 'pointer')
+            .attr('href', function (d, i) {
+              const angle = pieAngle[i]
+              if (angle > 90 && angle <= 270) { // 根据角度选择路径
+                return '#label-path-2'
+              } else {
+                return '#label-path-1'
+              }
+            })
+            .attr('startOffset', function (d, i) {
+              const p = pieData[i]
+              const angle = pieAngle[i]
+              const percent = (p.startAngle + p.endAngle) / 2 / 2 / Math.PI * 100
+              if (angle > 90 && angle <= 270) { // 分别计算每条路径的正确百分比
+                return 100 - percent + '%'
+              }
+              return percent + '%'
+            })
+            .text(function (d) {
+              return d.value
+            })
+            .on('click', function (d) {
+              treatConnMenuEvent(d.target.__data__.type, currentDConn)
+              // d3.event.stopPropagation()
+              // d.stopPropagation()
+            }, true)
+          }*/
+
+          /**
+            * @name: 生成操作菜单
+            * @param {*} current 当前元素
+            * @param {*} d 当前元素对应的数据
+            * @param {*} flag 显隐
+            */
+          function toggleMenu(current, d, flag) {
+            const currentD = d
+            const data = [{
+              population: 25,
+              value: '编辑',
+              type: 'editNode'
+            }, {
+              population: 25,
+              value: '删除',
+              type: 'deleNode'
+            }, {
+              population: 25,
+              value: '缩合',
+              type: 'fuseNode'
+            }, {
+              population: 25,
+              value: (_this.currentName.includes(currentD.id) ? '折叠':'展开'),
+              type: (_this.currentName.includes(currentD.id) ? 'focusOff':'focusOn')
+            }]
+            // 创建一个环生成器
+            const arc = d3.arc()
+              .innerRadius(80) // 内半径
+              .outerRadius(35) // 外半径
+            const pie = d3.pie()
+              .value(function (d) {
+                return d.population
+              })
+              .sort(null)
+            const pieData = pie(data)
+            const pieAngle = pieData.map(function (p) {
+              return (p.startAngle + p.endAngle) / 2 / Math.PI * 180
+            })
+            // 菜单容器
+            const g = current
+              .append('g')
+              .attr('class', 'menu-circle')
+              .attr('width', 100)
+              .attr('height', 100)
+            const Pie = g.append('g')
+            Pie.selectAll('path')
+              .data(pieData)
+              .enter()
+              .append('path')
+              .attr('d', arc)
+              .attr('fill', '#d3d7dc')
+              .style('stroke', '#fff')
+              .style('cursor', 'pointer')
+              .on('click', function (d) {
+                treatMenuEvent(d.target.__data__.type, currentD)
+                // d3.event.stopPropagation()
+                // d.stopPropagation()
+              })
+              .on('mouseover', function () {
+                d3.select(this)
+                  .style('fill', '#d3d7dc')
+                  .transition()
+                  .style('fill', '#aaaeb4')
+              })
+              .on('mouseout', function () {
+                d3.select(this)
+                  .style('fill', '#aaaeb4')
+                  .transition()
+                  .style('fill', '#d3d7dc')
+              })
+
+            // 安妮文字
+            const labelFontSize = 12
+            const labelValRadius = (170 * 0.35 - labelFontSize * 0.35)
+            const labelValRadius1 = (170 * 0.35 + labelFontSize * 0.35)
+            const labelsVals = current
+              .select('.menu-circle')
+              .append('g')
+              .classed('labelsvals', true)
+            // 定义两条路径以使标签的方向正确
+            labelsVals.append('def')
+              .append('path')
+              .attr('id', 'label-path-1')
+              .attr('d', `m0 ${-labelValRadius} a${labelValRadius} ${labelValRadius} 0 1,1 -0.01 0`)
+            labelsVals.append('def')
+              .append('path')
+              .attr('id', 'label-path-2')
+              .attr('d', `m0 ${-labelValRadius1} a${labelValRadius1} ${labelValRadius1} 0 1,0 0.01 0`)
+            labelsVals.selectAll('text')
+              .data(data)
+              .enter()
+              .append('text')
+              .attr('dy', function (d) {
+                return 0;
+              })
+              .style('font-size', labelFontSize)
+              .style('fill', 'black')
+              .style('font-weight', 'bold')
+              .style('text-anchor', 'middle')
+              .append('textPath')
+              .style('cursor', 'pointer')
+              .attr('href', function (d, i) {
+                const angle = pieAngle[i]
+                if (angle > 90 && angle <= 270) { // 根据角度选择路径
+                  return '#label-path-2'
+                } else {
+                  return '#label-path-1'
+                }
+              })
+              .attr('startOffset', function (d, i) {
+                const p = pieData[i]
+                const angle = pieAngle[i]
+                const percent = (p.startAngle + p.endAngle) / 2 / 2 / Math.PI * 100
+                if (angle > 90 && angle <= 270) { // 分别计算每条路径的正确百分比
+                  return 100 - percent + '%'
+                }
+                return percent + '%'
+              })
+              .text(function (d) {
+                return d.value
+              })
+              .on('click', function (d) {
+                treatMenuEvent(d.target.__data__.type, currentD)
+                // d3.event.stopPropagation()
+                // d.stopPropagation()
+              }, true)
+            if (flag === false) {
+              d3.selectAll('.menu-circle').remove()
+            }
+          }
+    
+          /**
+            * @name: 实体文字换行
+            * @param {*} dom
+            * @param {*} data
+            * @param {*} breaking 是否换行
+            */
+          function textBreaking(dom, data, breaking) {
+            const text = data.name
+            if (breaking) {
+              const len = text.length
+              if (len <= 3) {
+                dom.append('tspan')
+                  .attr('x', 0)
+                  .attr('y', 0)
+                  .text(text)
+              } else {
+                const topText = text.substring(0, 3)
+                const midText = text.substring(3, 7)
+                let botText = text.substring(7, len)
+                let topY = -22
+                let midY = 8
+                const botY = 34
+                if (len <= 9) {
+                  topY += 10
+                  midY += 10
+                } else {
+                  botText = text.substring(7, 9) + '...'
+                }
+                dom.text('')
+                dom.append('tspan')
+                  .attr('x', 0)
+                  .attr('y', topY)
+                  .text(function () {
+                    return topText
+                  })
+                dom.append('tspan')
+                  .attr('x', 0)
+                  .attr('y', midY)
+                  .text(function () {
+                    return midText
+                  })
+                dom.append('tspan')
+                  .attr('x', 0)
+                  .attr('y', botY - 7)
+                  .text(function () {
+                    return botText
+                  })
+              }
+            } else {
+              dom.append('tspan')
+                .attr('x', 0)
+                .attr('y', 0)
+                .style('font-size', 12)
+                .style('stroke', '#333')
+                .text(data.name)
+            }
+          }
+    
+          /**
+            * @name: 拖动
+            * @param {*} event
+            */
+          function dragstarted(event) {
+            if (!event.active) {
+            //if (!d3.event.active) {
+              simulation.alphaTarget(0.8).restart() // 设置衰减系数，对实体位置移动过程的模拟，数值越高移动越快，数值范围[0, 1]
+            }
+            event.subject.fx = event.x
+            event.subject.fy = event.y
+          }
+          function dragged(event) {
+            //event.fx = d3.event.x
+            //event.fy = d3.event.y
+            event.subject.fx = event.x
+            event.subject.fy = event.y
+          }
+          function dragended(event) {
+            if (!event.active) {
+              //if (!d3.event.active) {
+              simulation.alphaTarget(0)
+            }
+            event.subject.fx = null
+            event.subject.fy = null
+          }
+    
+        }
+      }
+    })
+    </script>
+      
+</body>
+</html>
